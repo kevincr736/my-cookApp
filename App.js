@@ -13,9 +13,11 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 // Importación de iconos vectoriales
 import { Ionicons } from '@expo/vector-icons';
 // Importación de componentes básicos de React Native
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Linking, Image } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, ScrollView, Linking, Image, TextInput, Modal } from 'react-native';
 // Importación de componente de imagen optimizado de Expo
 import { Image as ExpoImage } from 'expo-image';
+// Importación de servicios de Firebase
+import { RecipesService } from './recipesService';
 
 // Creación de navegadores para la app
 const Tab = createBottomTabNavigator(); // Navegador de pestañas (TabBar)
@@ -25,7 +27,7 @@ const Stack = createStackNavigator();   // Navegador de stack (pantallas apilada
 // Pantalla de detalles del plato (para la sección de Recetas)
 const DishDetailScreen = ({ route, navigation }) => {
   // Extrae el ID del plato que viene desde la pantalla anterior
-  const { dishId } = route.params;
+  const { dishId, isCustom, customRecipe } = route.params;
   // Estado para almacenar los datos del plato
   const [dish, setDish] = useState(null);
   // Estado para controlar si está cargando la información
@@ -33,8 +35,15 @@ const DishDetailScreen = ({ route, navigation }) => {
 
   // Hook que se ejecuta cuando el componente se monta o cambia dishId
   useEffect(() => {
-    fetchDishDetails();
-  }, [dishId]);
+    if (isCustom && customRecipe) {
+      // Si es una receta personalizada, usar los datos directamente
+      setDish(customRecipe);
+      setLoading(false);
+    } else {
+      // Si es una receta de la API, hacer la petición
+      fetchDishDetails();
+    }
+  }, [dishId, isCustom, customRecipe]);
 
   // Función asíncrona para obtener los detalles del plato desde la API
   const fetchDishDetails = async () => {
@@ -59,6 +68,16 @@ const DishDetailScreen = ({ route, navigation }) => {
   // Función para extraer ingredientes y medidas del plato
   const getIngredients = () => {
     if (!dish) return []; // Si no hay plato, retorna array vacío
+    
+    // Si es una receta personalizada, usar el campo ingredients
+    if (isCustom && dish.ingredients) {
+      return dish.ingredients.split('\n').map(ingredient => ({
+        ingredient: ingredient.trim(),
+        measure: ''
+      })).filter(item => item.ingredient !== '');
+    }
+    
+    // Si es una receta de la API, usar el método original
     const ingredients = []; // Array para almacenar ingredientes
     // Itera del 1 al 20 porque la API tiene hasta 20 ingredientes
     for (let i = 1; i <= 20; i++) {
@@ -103,28 +122,28 @@ const DishDetailScreen = ({ route, navigation }) => {
     <ScrollView style={styles.container}>
       {/* Imagen principal del plato */}
       <ExpoImage
-        source={{ uri: dish.strMealThumb }}
+        source={{ uri: dish.strMealThumb || dish.image || 'https://via.placeholder.com/400x300?text=Sin+Imagen' }}
         style={styles.dishImage}
         contentFit="cover"
       />
       
       <View style={styles.content}>
         {/* Nombre del plato */}
-        <Text style={styles.dishName}>{dish.strMeal}</Text>
+        <Text style={styles.dishName}>{dish.strMeal || dish.name}</Text>
         
         {/* Sección de categoría (solo si existe) */}
-        {dish.strCategory && (
+        {(dish.strCategory || dish.category) && (
           <View style={styles.infoSection}>
             <Text style={styles.sectionTitle}>Categoría</Text>
-            <Text style={styles.infoText}>{dish.strCategory}</Text>
+            <Text style={styles.infoText}>{dish.strCategory || dish.category}</Text>
           </View>
         )}
 
         {/* Sección de área/cocina (solo si existe) */}
-        {dish.strArea && (
+        {(dish.strArea || dish.area) && (
           <View style={styles.infoSection}>
             <Text style={styles.sectionTitle}>Cocina</Text>
-            <Text style={styles.infoText}>{dish.strArea}</Text>
+            <Text style={styles.infoText}>{dish.strArea || dish.area}</Text>
           </View>
         )}
 
@@ -144,10 +163,10 @@ const DishDetailScreen = ({ route, navigation }) => {
         )}
 
         {/* Sección de instrucciones paso a paso (solo si existe) */}
-        {dish.strInstructions && (
+        {(dish.strInstructions || dish.instructions) && (
           <View style={styles.infoSection}>
             <Text style={styles.sectionTitle}>Paso a Paso</Text>
-            <Text style={styles.instructionsText}>{dish.strInstructions}</Text>
+            <Text style={styles.instructionsText}>{dish.strInstructions || dish.instructions}</Text>
           </View>
         )}
 
@@ -179,11 +198,26 @@ const HomeScreen = ({ navigation }) => {
   const [recipes, setRecipes] = useState([]);
   // Estado para manejar los likes de las recetas
   const [recipeLikes, setRecipeLikes] = useState({});
+  // Estado para manejar las recetas personalizadas
+  const [customRecipes, setCustomRecipes] = useState([]);
+  // ID de usuario simulado (en una app real vendría de autenticación)
+  const userId = 'user123';
 
   // Hook que se ejecuta cuando el componente se monta
   useEffect(() => {
     getRecipes();
+    loadCustomRecipes();
   }, []);
+
+  // Función para cargar recetas personalizadas desde Firebase
+  const loadCustomRecipes = async () => {
+    try {
+      const userCustomRecipes = await RecipesService.getUserRecipes(userId);
+      setCustomRecipes(userCustomRecipes);
+    } catch (error) {
+      console.error('Error al cargar recetas personalizadas:', error);
+    }
+  };
 
   // Función asíncrona para obtener recetas desde la API
   const getRecipes = async () => {
@@ -211,38 +245,55 @@ const HomeScreen = ({ navigation }) => {
     }));
   };
 
+  // Función para recargar recetas personalizadas cuando se regresa de crear una receta
+  const refreshCustomRecipes = async () => {
+    await loadCustomRecipes();
+  };
+
   // Función para renderizar cada receta en la lista
-  const renderRecipe = ({ item }) => (
-    <View style={styles.recipeCard}>
-      <TouchableOpacity 
-        style={styles.recipeContent}
-        // Al presionar, navega a la pantalla de detalles con el ID del plato
-        onPress={() => navigation.navigate('DishDetail', { dishId: item.idMeal })}
-      >
-        {/* Imagen de la receta */}
-        <ExpoImage
-          source={{ uri: item.strMealThumb }}
-          style={styles.recipeImage}
-          contentFit="cover"
-        />
-        <View style={styles.recipeInfo}>
-          {/* Nombre de la receta */}
-          <Text style={styles.recipeName}>{item.strMeal}</Text>
-        </View>
-      </TouchableOpacity>
-      {/* Botón de like/dislike */}
-      <TouchableOpacity 
-        style={styles.likeButton}
-        onPress={() => toggleRecipeLike(item.idMeal)}
-      >
-        <Ionicons 
-          name={recipeLikes[item.idMeal] ? "heart" : "heart-outline"} 
-          size={24} 
-          color={recipeLikes[item.idMeal] ? "#FF6B6B" : "#666"} 
-        />
-      </TouchableOpacity>
-    </View>
-  );
+  const renderRecipe = ({ item }) => {
+    const isCustomRecipe = item.isCustom || false;
+    
+    return (
+      <View style={styles.recipeCard}>
+        <TouchableOpacity 
+          style={styles.recipeContent}
+          // Al presionar, navega a la pantalla de detalles con el ID del plato
+          onPress={() => navigation.navigate('DishDetail', { 
+            dishId: item.idMeal || item.id,
+            isCustom: isCustomRecipe,
+            customRecipe: isCustomRecipe ? item : null
+          })}
+        >
+          {/* Imagen de la receta */}
+          <ExpoImage
+            source={{ uri: item.strMealThumb || item.image || 'https://via.placeholder.com/300x200?text=Sin+Imagen' }}
+            style={styles.recipeImage}
+            contentFit="cover"
+          />
+          <View style={styles.recipeInfo}>
+            {/* Nombre de la receta */}
+            <Text style={styles.recipeName}>{item.strMeal || item.name}</Text>
+            {/* Indicador de receta personalizada */}
+            {isCustomRecipe && (
+              <Text style={styles.customRecipeLabel}>Tu Receta</Text>
+            )}
+          </View>
+        </TouchableOpacity>
+        {/* Botón de like/dislike */}
+        <TouchableOpacity 
+          style={styles.likeButton}
+          onPress={() => toggleRecipeLike(item.idMeal || item.id)}
+        >
+          <Ionicons 
+            name={recipeLikes[item.idMeal || item.id] ? "heart" : "heart-outline"} 
+            size={24} 
+            color={recipeLikes[item.idMeal || item.id] ? "#FF6B6B" : "#666"} 
+          />
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   // Si está cargando, muestra indicador de carga
   if (loading) {
@@ -254,19 +305,201 @@ const HomeScreen = ({ navigation }) => {
     );
   }
 
+  // Combinar recetas de la API y recetas personalizadas
+  const allRecipes = [...customRecipes.map(recipe => ({ ...recipe, isCustom: true })), ...recipes];
+
   return (
     <View style={styles.container}>
       {/* Subtítulo explicativo */}
       <Text style={styles.subtitle}>Toca una receta para ver los detalles</Text>
+      
       {/* Lista de recetas */}
       <FlatList
-        data={recipes} // Datos de las recetas
+        data={allRecipes} // Datos de todas las recetas
         renderItem={renderRecipe} // Función para renderizar cada item
-        keyExtractor={(item) => item.idMeal} // Clave única para cada item
+        keyExtractor={(item) => item.idMeal || item.id} // Clave única para cada item
         contentContainerStyle={styles.listContainer} // Estilos del contenedor
         showsVerticalScrollIndicator={false} // Oculta la barra de scroll
       />
+      
+      {/* BOTÓN FLOTANTE REDONDO */}
+      <TouchableOpacity 
+        style={styles.floatingButton}
+        onPress={() => navigation.navigate('CreateRecipe')}
+      >
+        <Ionicons name="add" size={28} color="#fff" />
+      </TouchableOpacity>
     </View>
+  );
+};
+
+// Pantalla para crear recetas personalizadas
+const CreateRecipeScreen = ({ navigation }) => {
+  const [recipeData, setRecipeData] = useState({
+    name: '',
+    description: '',
+    ingredients: '',
+    instructions: '',
+    category: '',
+    area: '',
+    prepTime: '',
+    servings: '',
+    difficulty: 'Media'
+  });
+  const [loading, setLoading] = useState(false);
+  const userId = 'user123';
+
+  const handleCreateRecipe = async () => {
+    if (!recipeData.name || !recipeData.ingredients || !recipeData.instructions) {
+      Alert.alert('Error', 'Por favor completa los campos obligatorios');
+      return;
+    }
+
+    console.log('🚀 Intentando crear receta:', recipeData);
+    setLoading(true);
+    
+    try {
+      const result = await RecipesService.createRecipe(userId, recipeData);
+      console.log('📝 Resultado de crear receta:', result);
+      
+      if (result.success) {
+        Alert.alert('Éxito', 'Receta creada correctamente', [
+          { text: 'OK', onPress: () => {
+            navigation.goBack();
+            // Recargar la lista de recetas personalizadas
+            navigation.getParent()?.getParent()?.setParams({ refresh: Date.now() });
+          }}
+        ]);
+        // Limpiar formulario
+        setRecipeData({
+          name: '',
+          description: '',
+          ingredients: '',
+          instructions: '',
+          category: '',
+          area: '',
+          prepTime: '',
+          servings: '',
+          difficulty: 'Media'
+        });
+      } else {
+        console.error('❌ Error al crear receta:', result.error);
+        Alert.alert('Error', result.error);
+      }
+    } catch (error) {
+      console.error('❌ Error en catch:', error);
+      Alert.alert('Error', 'No se pudo crear la receta: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ScrollView style={styles.container}>
+      <View style={styles.formContainer}>
+        <Text style={styles.formTitle}>Crear Nueva Receta</Text>
+        
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Nombre de la Receta *</Text>
+          <TextInput
+            style={styles.textInput}
+            value={recipeData.name}
+            onChangeText={(text) => setRecipeData({...recipeData, name: text})}
+            placeholder="Ej: Paella Valenciana"
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Descripción</Text>
+          <TextInput
+            style={[styles.textInput, styles.textArea]}
+            value={recipeData.description}
+            onChangeText={(text) => setRecipeData({...recipeData, description: text})}
+            placeholder="Describe brevemente la receta"
+            multiline
+            numberOfLines={3}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Ingredientes *</Text>
+          <TextInput
+            style={[styles.textInput, styles.textArea]}
+            value={recipeData.ingredients}
+            onChangeText={(text) => setRecipeData({...recipeData, ingredients: text})}
+            placeholder="Lista los ingredientes separados por comas"
+            multiline
+            numberOfLines={4}
+          />
+        </View>
+
+        <View style={styles.inputGroup}>
+          <Text style={styles.inputLabel}>Instrucciones *</Text>
+          <TextInput
+            style={[styles.textInput, styles.textArea]}
+            value={recipeData.instructions}
+            onChangeText={(text) => setRecipeData({...recipeData, instructions: text})}
+            placeholder="Describe paso a paso cómo preparar la receta"
+            multiline
+            numberOfLines={6}
+          />
+        </View>
+
+        <View style={styles.rowInputs}>
+          <View style={styles.halfInput}>
+            <Text style={styles.inputLabel}>Categoría</Text>
+            <TextInput
+              style={styles.textInput}
+              value={recipeData.category}
+              onChangeText={(text) => setRecipeData({...recipeData, category: text})}
+              placeholder="Ej: Principal"
+            />
+          </View>
+          <View style={styles.halfInput}>
+            <Text style={styles.inputLabel}>Cocina</Text>
+            <TextInput
+              style={styles.textInput}
+              value={recipeData.area}
+              onChangeText={(text) => setRecipeData({...recipeData, area: text})}
+              placeholder="Ej: Española"
+            />
+          </View>
+        </View>
+
+        <View style={styles.rowInputs}>
+          <View style={styles.halfInput}>
+            <Text style={styles.inputLabel}>Tiempo de Preparación</Text>
+            <TextInput
+              style={styles.textInput}
+              value={recipeData.prepTime}
+              onChangeText={(text) => setRecipeData({...recipeData, prepTime: text})}
+              placeholder="Ej: 45 min"
+            />
+          </View>
+          <View style={styles.halfInput}>
+            <Text style={styles.inputLabel}>Porciones</Text>
+            <TextInput
+              style={styles.textInput}
+              value={recipeData.servings}
+              onChangeText={(text) => setRecipeData({...recipeData, servings: text})}
+              placeholder="Ej: 4 personas"
+            />
+          </View>
+        </View>
+
+        <TouchableOpacity 
+          style={styles.createButton}
+          onPress={handleCreateRecipe}
+          disabled={loading}
+        >
+          {loading ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.createButtonText}>Crear Receta</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </ScrollView>
   );
 };
 
@@ -300,6 +533,15 @@ const RecipesStack = () => {
         component={DishDetailScreen}
         options={{ 
           title: 'Detalle del Plato',
+          headerTitleAlign: 'center' // Centra el título
+        }}
+      />
+      {/* Pantalla para crear recetas */}
+      <Stack.Screen 
+        name="CreateRecipe" 
+        component={CreateRecipeScreen}
+        options={{ 
+          title: '➕ Crear Receta',
           headerTitleAlign: 'center' // Centra el título
         }}
       />
@@ -348,10 +590,10 @@ const CountryDishScreen = ({ route, navigation }) => {
 
   const renderTraditionalDish = ({ item }) => (
     <View style={styles.traditionalDishCard}>
-      <Image
+      <ExpoImage
         source={item.image}
         style={styles.traditionalDishImage}
-        resizeMode="cover"
+        contentFit="cover"
       />
       <View style={styles.traditionalDishInfo}>
         <Text style={styles.traditionalDishName}>{item.name}</Text>
@@ -362,10 +604,10 @@ const CountryDishScreen = ({ route, navigation }) => {
 
   return (
     <ScrollView style={styles.container}>
-      <Image
+      <ExpoImage
         source={country.dishImage}
         style={styles.dishImage}
-        resizeMode="cover"
+        contentFit="cover"
       />
       
       <View style={styles.content}>
@@ -713,7 +955,7 @@ export default function App() {
               headerShown: false, // Oculta el header (lo maneja ProfileStack)
               // Icono personalizado para la pestaña
               tabBarIcon: ({ color, size }) => (
-                <Ionicons name="globe" size={size} color={color} />
+                <Ionicons name="earth" size={size} color={color} />
               ),
             }}
           />
@@ -755,6 +997,7 @@ const styles = StyleSheet.create({
   },
   listContainer: {
     padding: 10,
+    paddingBottom: 80, // Espacio extra para el botón flotante
   },
   recipeCard: {
     flexDirection: 'row',
@@ -1044,6 +1287,94 @@ const styles = StyleSheet.create({
     },
     shadowOpacity: 0.2,
     shadowRadius: 2,
+  },
+  // Estilos para el formulario de crear receta
+  formContainer: {
+    padding: 20,
+  },
+  formTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#333',
+    textAlign: 'center',
+    marginBottom: 30,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 16,
+    backgroundColor: '#fff',
+  },
+  textArea: {
+    height: 100,
+    textAlignVertical: 'top',
+  },
+  rowInputs: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  halfInput: {
+    flex: 1,
+    marginRight: 10,
+  },
+  createButton: {
+    backgroundColor: '#FF6B6B',
+    paddingVertical: 15,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+    alignItems: 'center',
+    marginTop: 20,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 2,
+    },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  createButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  // Estilos para el indicador de receta personalizada
+  customRecipeLabel: {
+    fontSize: 12,
+    color: '#4CAF50',
+    fontWeight: 'bold',
+    marginTop: 4,
+  },
+  // Estilos para el botón flotante redondo
+  floatingButton: {
+    position: 'absolute',
+    bottom: 20,
+    right: 20,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#FF6B6B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 4.65,
   },
 });
 
